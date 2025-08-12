@@ -10,10 +10,12 @@ from litgpt.model import GPT
 from utils.snac_utils import layershift, snac_config
 from tqdm import tqdm
 
+# 采样的三个函数
 
 def multinomial_num_samples_1(probs: torch.Tensor) -> torch.Tensor:
     if torch._dynamo.is_compiling():
         # Faster alternative to `torch.multinomial(probs, num_samples=1)` that is also CUDAGraph friendly
+        # 特殊技巧
         distribution = torch.empty_like(probs).exponential_(1)
         return torch.argmax(probs / distribution, dim=-1, keepdim=True)
     return torch.multinomial(probs, num_samples=1)
@@ -29,6 +31,7 @@ def sample_top_p(logits: torch.Tensor, top_p: float) -> torch.Tensor:
     # Keep at least 1 token always to prevent the case where no token is selected
     # In this case the most probable one is always kept
     sorted_indices_to_remove[-1:] = 0
+    # 恢复初始顺序
     indices_to_remove = sorted_indices_to_remove.scatter(
         0, sorted_indices, sorted_indices_to_remove
     )
@@ -44,6 +47,7 @@ def sample(
 ) -> torch.Tensor:
     if top_p < 0.0 or top_p > 1.0:
         raise ValueError(f"top_p must be in [0, 1], got {top_p}")
+    # 获得当前一步的logits
     logits = logits[0, -1]
     # optionally crop the logits to only the top k options
     if top_k is not None:
@@ -59,8 +63,10 @@ def sample(
             logits = sample_top_p(logits, top_p)
         probs = torch.nn.functional.softmax(logits, dim=-1)
         return multinomial_num_samples_1(probs)
+    # 确定性选择
     return torch.argmax(logits, dim=-1, keepdim=True)
 
+# 生成下一个token的系列函数
 
 def next_token(
     model: GPT, input_pos: torch.Tensor, x: list, **kwargs: Any
@@ -146,12 +152,14 @@ def next_token_batch(
     input_pos: torch.Tensor,
     **kwargs: Any,
 ) -> torch.Tensor:
+    # 数据位置准备
     input_pos = input_pos.to(model.device)
     input_ids = [input_id.to(model.device) for input_id in input_ids]
     logits_a, logit_t = model(
         audio_features, input_ids, input_pos, whisper_lens=whisper_lens, task=task
     )
 
+    # 适配sample输入形状
     for i in range(7):
         logits_a[i] = logits_a[i][0].unsqueeze(0)
     logit_t = logit_t[1].unsqueeze(0)
